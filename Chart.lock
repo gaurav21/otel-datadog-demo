@@ -1,0 +1,9 @@
+dependencies:
+- name: datadog
+  repository: https://helm.datadoghq.com
+  version: 3.3.0
+- name: opentelemetry-demo
+  repository: https://open-telemetry.github.io/opentelemetry-helm-charts
+  version: 0.12.6
+digest: sha256:b7954382524845565b2776627650740a68f7bdb038a9072c8c395928fcfa5daf
+generated: "2023-10-24T13:48:37.043342+08:00"

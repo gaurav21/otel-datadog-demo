@@ -1,0 +1,8 @@
+opentelemetry-demo:
+  observability:
+    jaeger:
+      enabled: false
+    grafana:
+      enabled: false
+    prometheus:
+      enabled: false

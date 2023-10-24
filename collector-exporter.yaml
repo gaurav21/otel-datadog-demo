@@ -1,0 +1,259 @@
+ingest: false
+.collector-config: &collector-config
+  receivers:
+    prometheus:
+      config:
+        scrape_configs:
+          - job_name: "otelcol"
+            scrape_interval: 10s
+            static_configs:
+              - targets: [ "0.0.0.0:8888" ]
+            metric_relabel_configs:
+              - source_labels: [ __name__ ]
+                regex: ".*grpc_io.*"
+                action: drop
+    hostmetrics:
+      collection_interval: 10s
+      scrapers:
+        paging:
+          metrics:
+            system.paging.utilization:
+              enabled: true
+        cpu:
+          metrics:
+            system.cpu.utilization:
+              enabled: true
+        disk:
+        filesystem:
+          metrics:
+            system.filesystem.utilization:
+              enabled: true
+        load:
+        memory:
+        network:
+        processes:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:5317
+        http:
+    filelog/adservice:
+      include_file_path: true
+      include_file_path_resolved: true
+      include_file_name_resolved: true
+      start_at: end
+      poll_interval: 500ms
+      include:
+        - /var/log/pods/**/*ad-service*/*.log
+      operators:
+        # Detect pod, namespace, and container names from the file name.
+        - id: parse_body
+          type: json_parser
+          parse_to: body
+        - id: parse_log
+          type: json_parser
+          parse_from: body.log
+        - id: trace
+          type: trace_parser
+          trace_id:
+            parse_from: attributes.contextMap.trace_id
+          span_id:
+            parse_from: attributes.contextMap.span_id
+      attributes:
+        ddsource: java
+        service: ad-service
+    filelog/go:
+      include:
+        - /var/log/pods/**/*checkout*/*.log
+        - /var/log/pods/**/*product-catalog*/*.log
+        - /var/log/pods/**/*otel-col*/*.log
+      include_file_path: true
+      include_file_path_resolved: true
+      include_file_name_resolved: true
+      start_at: end
+      poll_interval: 500ms
+      operators:
+        # Detect pod, namespace, and container names from the file name.
+        - id: parse_body
+          type: json_parser
+          parse_to: body
+        - id: parse_log
+          type: json_parser
+          parse_from: body.log
+        - id: trace
+          type: trace_parser
+          trace_id:
+            parse_from: attributes.trace_id
+          span_id:
+            parse_from: attributes.span_id
+      attributes:
+        ddsource: golang
+        ddtags: env:otel-collector
+
+    filelog/recommendationservice:
+      include:
+        - /var/log/pods/**/*recommendation*/*.log
+      include_file_path: true
+      include_file_path_resolved: true
+      include_file_name_resolved: true
+      start_at: end
+      poll_interval: 500ms
+      operators:
+        # Detect pod, namespace, and container names from the file name.
+        - id: parse_body
+          type: json_parser
+          parse_to: body
+        - id: parse_log
+          type: json_parser
+          parse_from: body.log
+        - id: trace
+          type: trace_parser
+          trace_id:
+            parse_from: attributes.otelTraceID
+          span_id:
+            parse_from: attributes.otelSpanID
+      attributes:
+        ddsource: python
+        service: recommendation-service
+        ddtags: env:otel-collector
+
+    filelog/currencyservice:
+      include:
+        - /var/log/pods/**/*currency-service*/*.log
+      include_file_path: true
+      include_file_path_resolved: true
+      include_file_name_resolved: true
+      start_at: end
+      poll_interval: 500ms
+      operators:
+        # Detect pod, namespace, and container names from the file name.
+        - id: parse_body
+          type: json_parser
+          parse_to: body
+        - id: parse_log
+          type: regex_parser
+          parse_from: body.log
+          regex: "(?P<msg>.*) trace_id=(?P<trace_id>.*)"
+        - id: trace
+          type: trace_parser
+          trace_id:
+            parse_from: attributes.trace_id
+      attributes:
+        service: currency-service
+        ddsource: cpp
+        ddtags: env:otel-collector
+  exporters:
+    datadog:
+      host_metadata:
+        tags: [ env:otel-collector ]
+      metrics:
+        histograms:
+          mode: counters
+          send_count_sum_metrics: true
+      api:
+        key: "$DD_API_KEY"
+
+  processors:
+    resourcedetection:
+      # ensures host.name and other important resource tags
+      # get picked up
+      detectors: [ env, gcp, ecs, ec2, azure, system ]
+      timeout: 5s
+      override: false
+    # adds various tags related to k8s
+    k8sattributes:
+    batch:
+      send_batch_max_size: 1000
+      send_batch_size: 100
+      timeout: 10s
+
+  service:
+    telemetry:
+      logs:
+        encoding: "json"
+        initial_fields:
+          - service: "otel-collector"
+    pipelines:
+      metrics:
+        receivers: [ otlp, hostmetrics, prometheus ]
+        processors: [ resourcedetection, k8sattributes, batch ]
+        exporters: [ datadog ]
+      traces:
+        receivers: [ otlp ]
+        processors: [ resourcedetection, k8sattributes, batch ]
+        exporters: [ datadog ]
+      logs:
+        receivers:
+          [
+            filelog/go,
+            filelog/adservice,
+            filelog/recommendationservice,
+            filelog/currencyservice,
+          ]
+        processors: [ resourcedetection, k8sattributes, batch ]
+        exporters: [ datadog ]
+.standard: &override
+  envOverrides:
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: 'http://$(HOST_IP):$(OTLP_PORT_1)'
+    - name: LOCUST_HEADLESS
+      value: "true"
+opentelemetry-demo:
+  components:
+    adService: *override
+    redis: *override
+    cartService: *override
+    checkoutService: *override
+    currencyService: *override
+    emailService:
+      envOverrides:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: 'http://$(HOST_IP):$(OTLP_PORT_1)'
+        - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+          value: 'http://$(HOST_IP):$(OTLP_PORT_2)/v1/traces'
+        - name: LOCUST_HEADLESS
+          value: "true"
+    featureflagService: *override
+    ffsPostgres: *override
+    frontend: *override
+    frontendProxy: *override
+    loadgenerator: *override
+    paymentService: *override
+    productCatalogService: *override
+    recommendationService: *override
+    shippingService: *override
+    quoteService: *override
+  default:
+    envOverrides:
+      - name: HOST_IP
+        valueFrom:
+          fieldRef:
+            fieldPath: status.hostIP
+      - name: OTLP_PORT_1
+        value: "5317"
+      - name: OTLP_PORT_2
+        value: "5318"
+      - name: OTEL_RESOURCE_ATTRIBUTES
+        value: >-
+          service.name=$(OTEL_SERVICE_NAME),
+          k8s.namespace.name=$(OTEL_K8S_NAMESPACE),
+          k8s.node.name=$(OTEL_K8S_NODE_NAME),
+          k8s.pod.name=$(OTEL_K8S_POD_NAME),
+          deployment.environment=$(OTEL_K8S_NAMESPACE)
+  opentelemetry-collector:
+    ports:
+      otlp:
+        enabled: true
+        containerPort: 5317
+        servicePort: 5317
+        hostPort: 5317
+        protocol: TCP
+    extraEnvs:
+      - name: DD_API_KEY
+        valueFrom:
+          secretKeyRef:
+            name: datadog-secrets
+            key: api-key
+            optional: false
+    mode: "daemonset"
+    config: *collector-config
