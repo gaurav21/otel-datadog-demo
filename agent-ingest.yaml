@@ -53,6 +53,7 @@ opentelemetry-demo:
 datadog:
   datadog:
     apiKeyExistingSecret: "datadog-secrets"
+    site: "datadoghq.eu"
     tags:
       - "env:otel-ingest"
     kubelet:
